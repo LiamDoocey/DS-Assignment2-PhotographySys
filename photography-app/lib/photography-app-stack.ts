@@ -8,6 +8,7 @@ import * as sns from 'aws-cdk-lib/aws-sns'
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as lambdaEvent from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions'
 
 
 export class PhotographyAppStack extends cdk.Stack {
@@ -59,13 +60,13 @@ export class PhotographyAppStack extends cdk.Stack {
     })
 
     const env = {
-      BUCKET: bucket.bucketName,
+      BUCKET_NAME: bucket.bucketName,
       UPLOAD_QUEUE: ulq.queueUrl,
       DELETE_QUEUE: dlq.queueUrl,
-      TABLE: table.tableName,
+      TABLE_NAME: table.tableName,
       TOPIC: topic.topicArn,
-      SENDER_MAIL: 'temp@temp.com',
-      FALLBACK_EMAIL: 'fallback@temp.com'
+      SENDER_MAIL: 'ljdoocey@gmail.com',
+      FALLBACK_EMAIL: 'ljdoocey2@gmail.com'
     }
 
     // Lambda Functions
@@ -121,6 +122,30 @@ export class PhotographyAppStack extends cdk.Stack {
 
     //Update Status Permissions
     table.grantReadWriteData(updateStatusFn)
+
+
+    topic.addSubscription(new subs.LambdaSubscription(addMetadataFn, {
+      filterPolicy: {
+        metadata_type: sns.SubscriptionFilter.stringFilter({
+          allowlist: ['Caption', 'Date', 'Name', 'name']
+        })
+      }
+    }))
+
+    const updateStatusRawSub = new sns.CfnSubscription(this, 'UpdateStatusRawSub', {
+      protocol: 'lambda',
+      topicArn: topic.topicArn,
+      endpoint: updateStatusFn.functionArn,
+      filterPolicy: { metadata_type: [{ exists: false }] },
+    })
+
+    new lambda.CfnPermission(this, 'AllowSnsInvokeUpdate', {
+      action: 'lambda:InvokeFunction',
+      functionName: updateStatusFn.functionArn,
+      principal: 'sns.amazonaws.com',
+      sourceArn: topic.topicArn,
+    });
+
 
     //Confirmation Mailer
     const confirmationMailerFn = new lambda.Function(this, 'ConfirmationMailerFn', {
