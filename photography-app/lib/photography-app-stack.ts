@@ -5,6 +5,9 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications'
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
 import * as sns from 'aws-cdk-lib/aws-sns'
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaEvent from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as iam from 'aws-cdk-lib/aws-iam';
 
 
 export class PhotographyAppStack extends cdk.Stack {
@@ -47,6 +50,7 @@ export class PhotographyAppStack extends cdk.Stack {
       partitionKey: {name: 'id', type: dynamodb.AttributeType.STRING},
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES
     })
 
     //SNS Topic
@@ -54,11 +58,88 @@ export class PhotographyAppStack extends cdk.Stack {
       displayName: 'Photos Topic'
     })
 
-    //TESTING OUTPUTS
-    new cdk.CfnOutput(this, 'BucketName', {value: bucket.bucketName})
-    new cdk.CfnOutput(this, 'Upload Q URL', {value: ulq.queueUrl})
-    new cdk.CfnOutput(this, 'Delete Q URL', {value: dlq.queueUrl})
-    new cdk.CfnOutput(this, 'Table Name', {value: table.tableName})
-    new cdk.CfnOutput(this, 'Topic ARN', {value: topic.topicArn})
+    const env = {
+      BUCKET: bucket.bucketName,
+      UPLOAD_QUEUE: ulq.queueUrl,
+      DELETE_QUEUE: dlq.queueUrl,
+      TABLE: table.tableName,
+      TOPIC: topic.topicArn,
+      SENDER_MAIL: 'temp@temp.com',
+      FALLBACK_EMAIL: 'fallback@temp.com'
+    }
+
+    // Lambda Functions
+
+    //Log Image
+    const logImageFn = new lambda.Function(this, 'LogImageFn', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'log-image.handler',
+      code: lambda.Code.fromAsset('lambdas'),
+      environment: env,
+      timeout: cdk.Duration.seconds(10),
+    })
+    logImageFn.addEventSource(new lambdaEvent.SqsEventSource(ulq, {batchSize: 5}))
+
+    //Log Image Permissions
+    bucket.grantRead(logImageFn)
+    table.grantWriteData(logImageFn)
+
+    //Remove Image
+    const removeImageFn = new lambda.Function(this, 'RemoveImageFn', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'remove-image.handler',
+      code: lambda.Code.fromAsset('lambdas'),
+      environment: env,
+      timeout: cdk.Duration.seconds(10),
+    })
+    removeImageFn.addEventSource(new lambdaEvent.SqsEventSource(dlq, {batchSize: 5}))
+
+    //Remove Image Permissions
+    bucket.grantDelete(removeImageFn)
+
+
+    //Add Metadata
+    const addMetadataFn = new lambda.Function(this, 'AddMetadataFn', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'add-metadata.handler',
+      code: lambda.Code.fromAsset('lambdas'),
+      environment: env,
+      timeout: cdk.Duration.seconds(10),
+    })
+
+    //Add Metadata Permissions
+    table.grantReadWriteData(addMetadataFn)
+
+    //Update Status
+    const updateStatusFn = new lambda.Function(this, 'UpdateStatusFn', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'update-status.handler',
+      code: lambda.Code.fromAsset('lambdas'),
+      environment: env,
+      timeout: cdk.Duration.seconds(10),
+    })
+
+    //Update Status Permissions
+    table.grantReadWriteData(updateStatusFn)
+
+    //Confirmation Mailer
+    const confirmationMailerFn = new lambda.Function(this, 'ConfirmationMailerFn', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'confirmation-mailer.handler',
+      code: lambda.Code.fromAsset('lambdas'),
+      environment: env,
+      timeout: cdk.Duration.seconds(20),
+    })
+    confirmationMailerFn.addEventSource(new lambdaEvent.DynamoEventSource(table, {
+      startingPosition: lambda.StartingPosition.LATEST,
+      batchSize: 5,
+      retryAttempts: 3
+    }))
+
+    //SES for Mailer
+    confirmationMailerFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ses:SendEmail', 'ses:SendRawEmail'],
+      resources: ['*'],
+    }))
   }
 }
