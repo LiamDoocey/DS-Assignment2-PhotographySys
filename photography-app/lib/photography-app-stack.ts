@@ -31,8 +31,9 @@ export class PhotographyAppStack extends cdk.Stack {
     })
 
     const ulq = new sqs.Queue(this, 'uploadQueue', {
-      visibilityTimeout: cdk.Duration.seconds(30),
-      deadLetterQueue: {queue: dlq, maxReceiveCount: 3},
+      //Shorter for test purposes
+      visibilityTimeout: cdk.Duration.seconds(10),
+      deadLetterQueue: {queue: dlq, maxReceiveCount: 2},
     })
 
     //S3 -> ulq
@@ -65,7 +66,7 @@ export class PhotographyAppStack extends cdk.Stack {
       DELETE_QUEUE: dlq.queueUrl,
       TABLE_NAME: table.tableName,
       TOPIC: topic.topicArn,
-      SENDER_MAIL: 'ljdoocey@gmail.com',
+      SENDER_EMAIL: 'ljdoocey@gmail.com',
       FALLBACK_EMAIL: 'ljdoocey2@gmail.com'
     }
 
@@ -132,11 +133,17 @@ export class PhotographyAppStack extends cdk.Stack {
       }
     }))
 
-    const updateStatusRawSub = new sns.CfnSubscription(this, 'UpdateStatusRawSub', {
+    new sns.CfnSubscription(this, 'UpdateStatusRawSub', {
       protocol: 'lambda',
       topicArn: topic.topicArn,
       endpoint: updateStatusFn.functionArn,
-      filterPolicy: { metadata_type: [{ exists: false }] },
+      filterPolicy: { 
+        metadata_type: [
+          { exists: false },
+          { 'anything-but': ['Caption', 'Date', 'Name', 'name'] }
+        ]
+      },
+      filterPolicyScope: 'MessageAttributes'
     })
 
     new lambda.CfnPermission(this, 'AllowSnsInvokeUpdate', {
